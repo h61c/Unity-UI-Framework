@@ -3,12 +3,6 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEditor;
 using UnityEditorInternal;
-using System.Runtime.InteropServices;
-using System.Drawing.Printing;
-using System.Data;
-using System.Linq;
-using Unity.VisualScripting;
-using System.Reflection.Emit;
 
 namespace Unite.Framework.UI
 {
@@ -20,12 +14,25 @@ namespace Unite.Framework.UI
 
         public override void OnInspectorGUI()
         {
-            base.OnInspectorGUI();
+            //base.OnInspectorGUI();
             Init();
-            table.parent = EditorGUILayout.ObjectField("父物体", table.parent, typeof(Transform), true) as Transform;
-            if (table.parent is null) return;
+            table.layoutType = (LayoutType)EditorGUILayout.EnumPopup("布局类型", table.layoutType);
             table.drawList.DoLayoutList();
             DrawSelect();
+        }
+
+        void DrawMap()
+        {
+            EditorGUILayout.LabelField("Map");
+            ++EditorGUI.indentLevel;
+            foreach (var pair in table.map)
+            {
+                GUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField("key", pair.Key);
+                EditorGUILayout.LabelField("value", pair.Value.ToString());
+                GUILayout.EndHorizontal();
+            }
+            --EditorGUI.indentLevel;
         }
 
         void DrawSelect()
@@ -35,60 +42,74 @@ namespace Unite.Framework.UI
             var index = table.drawList.index;
             Editor.CreateCachedEditor(table[index], typeof(ListDataEditor), ref previourEditor);
             ++EditorGUI.indentLevel;
-            if (table.propertyFoldout = EditorGUILayout.Foldout(table.propertyFoldout, "属性:", true))
+            if (table.propertyFoldout = EditorGUILayout.Foldout(table.propertyFoldout, "属性:" + table[table.drawList.index].name, true))
                 previourEditor.OnInspectorGUI();
             --EditorGUI.indentLevel;
         }
 
         void Init()
         {
-            if (table is null)
-            {
-                table = target as TableData;
-                
-            }
+            if (table is null)      table = target as TableData;
 
-            if (table.data is null)
-            {
-                table.data = new List<ListData>();
-            }
+            if (table.data is null) table.data = new List<ListData>();
             
-            if (table.drawList is null)
+            if (table.drawList is not null) return;
+            table.drawList = new ReorderableList(table.data, typeof(ListData))
             {
-                table.drawList = new ReorderableList(table.data, typeof(ListData));
-
-                table.drawList.drawHeaderCallback = (rect) =>
+                drawHeaderCallback = (rect) =>
                 {
                     if (table.Count == 0) return;
                     var curRect = new Rect(rect);
                     var width = curRect.width /= table[0].Count + 1;
-                    curRect.x = width;
+                    curRect.x = width + 30;
                     EditorGUILayout.BeginHorizontal();
                     for (int i = 0; i < table[0].Count; ++i)
                     {
-                        EditorGUI.LabelField(curRect, i.ToString());
+                        foreach (var list in table)
+                        {
+                            list.texts[i].name = EditorGUI.TextField(curRect, table[0].texts[i].name);
+                            list.OnPrimaryChange(list.texts[i].name, i);
+                        }
                         curRect.x += width;
                     }
                     EditorGUILayout.EndHorizontal();
-                };
-                table.drawList.drawElementCallback = (rect, index, isActived, isFocusd) =>
+                },
+                drawElementCallback = (rect, index, isActived, isFocusd) =>
                 {
                     var curRect = new Rect(rect);
                     var width = curRect.width /= table[0].Count + 1;
                     EditorGUI.LabelField(curRect, table[index].title);
+                    table.OnPrimaryChange(table[index].title, index);
 
-                    curRect.x = width;
+                    curRect.x = width + 30;
                     for (int i = 0; i < table[index].Count; ++i)
                     {
                         table[index][i] = EditorGUI.TextField(curRect, table[index][i]);
                         curRect.x += width;
                     }
-                };
-                table.drawList.onReorderCallbackWithDetails = (list, oldIndex, newIndex) =>
+                },
+                onReorderCallbackWithDetails = (list, oldIndex, newIndex) =>
                 {
                     table[newIndex].transform.SetSiblingIndex(newIndex);
-                };
-            }
+                },
+                onAddCallback = (list) => 
+                {
+                    table.Add();
+                    list.index = list.count - 1;
+                },
+                onRemoveCallback = (tList) =>
+                {
+                    table.RemoveAt(tList.index--);
+                    tList.index = Mathf.Max(0, tList.index);
+                }
+            };
+        }
+
+        [MenuItem("GameObject/UniteFramework/UI/TableData", false, 12)]
+        public static void Create()
+        {
+            var element = new GameObject().AddComponent<TableData>();
+            element.transform.parent = Selection.activeTransform;
         }
     }
 }

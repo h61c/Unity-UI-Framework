@@ -12,17 +12,12 @@ namespace Unite.Framework.UI
     {
         ListData list;
         bool apply;
-
         public override void OnInspectorGUI()
         {
-            //base.OnInspectorGUI();
-
             Init();
             list.title = EditorGUILayout.TextField("标题", list.title);
-            list.textParent = EditorGUILayout.ObjectField("父物体", list.textParent, typeof(Transform), true) as Transform;
-            if (list.textParent == null) return;
-
-            DrawDropdown();
+            list.layoutType = (LayoutType)EditorGUILayout.EnumPopup("布局类型", list.layoutType);
+            DrawDataTypeDropdown();
             
             list.textList.DoLayoutList();
             if (GUILayout.Button("清空列表数据"))
@@ -35,7 +30,7 @@ namespace Unite.Framework.UI
             EditorGUILayout.BeginHorizontal();
             int selectIndex = list.textList.index;
             string selectElement = selectIndex >= 0 && selectIndex < list.Count ? list.texts[list.textList.index].name : "";
-            var foldoutField = "属性: " + (list.drawSelect ? selectElement : "字段模板");
+            string foldoutField = "属性: " + (list.drawSelect ? selectElement : "字段模板");
             var foldoutContnet = new GUIContent(foldoutField, "");
             list.propertyFoldout = EditorGUILayout.Foldout(list.propertyFoldout, foldoutContnet, true);
             if (!list.drawSelect && GUILayout.Button("应用"))
@@ -55,10 +50,23 @@ namespace Unite.Framework.UI
                 DrawProperty();
             }
             --EditorGUI.indentLevel;
-
         }
 
-        void DrawDropdown()
+        void DrawMap()
+        {
+            EditorGUILayout.LabelField("Map");
+            ++EditorGUI.indentLevel;
+            foreach (var pair in list.map)
+            {
+                GUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField("key", pair.Key);
+                EditorGUILayout.LabelField("value", pair.Value.ToString());
+                GUILayout.EndHorizontal();
+            }
+            --EditorGUI.indentLevel;
+        }
+
+        void DrawDataTypeDropdown()
         {
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField("数据类型");
@@ -66,10 +74,10 @@ namespace Unite.Framework.UI
             if (list.typeDropdown)
             {
                 var menu = new GenericMenu();
-                var values = System.Enum.GetValues(typeof(ListData.DataType));
+                var values = System.Enum.GetValues(typeof(DataType));
                 foreach (var value in values)
                 {
-                    var type = (ListData.DataType)value;
+                    var type = (DataType)value;
                     menu.AddItem(new GUIContent(type.ToString()), false, () => { OnTypeChange(type); });
                 }
                 menu.ShowAsContext();
@@ -79,13 +87,20 @@ namespace Unite.Framework.UI
 
         void DrawProperty()
         {
-            if (list.drawSelect)
+            try 
             {
-                DrawSelectedProperty();
+                if (list.drawSelect)
+                {
+                    DrawSelectedProperty();
+                }
+                else 
+                {
+                    DrawTemplateProperty();
+                }
             }
-            else 
+            catch
             {
-                DrawTemplateProperty();
+                EditorGUILayout.LabelField("属性序列化出错");
             }
         }
 
@@ -116,18 +131,20 @@ namespace Unite.Framework.UI
 
         void DrawTemplateProperty()
         {
-            if (!list.propertyFoldout) return;
+            if (!list.propertyFoldout || list.Count is 0) return;
             list.alwaysUpdate = EditorGUILayout.Toggle("始终更新", list.alwaysUpdate);
-            var rectTransform = list.templateRect.GetIterator();
+            var rtSerializedObject = new SerializedObject(list.texts[0].rectTransform);
+            var rectTransform = rtSerializedObject.GetIterator();
             rectTransform.NextVisible(true);
             do
             {
                 EditorGUILayout.PropertyField(rectTransform);
             }
             while(rectTransform.NextVisible(false));
-            list.templateRect.ApplyModifiedProperties();
+            rtSerializedObject.ApplyModifiedProperties();
 
-            var text = list.templateText.GetIterator();
+            var textSerializedObject = new SerializedObject(list.texts[0]);
+            var text = textSerializedObject.GetIterator();
             text.NextVisible(true);
             do
             {
@@ -135,10 +152,10 @@ namespace Unite.Framework.UI
                 EditorGUILayout.PropertyField(text);
             }
             while(text.NextVisible(false));
-            list.templateText.ApplyModifiedProperties();
+            textSerializedObject.ApplyModifiedProperties();
             
-            var sourceRect = list.template.GetComponent<RectTransform>();
-            var sourceText = list.template.GetComponent<Text>();
+            var sourceRect = list.texts[0].GetComponent<RectTransform>();
+            var sourceText = list.texts[0];
 
             if (!(apply || list.alwaysUpdate))
             {
@@ -157,65 +174,44 @@ namespace Unite.Framework.UI
 
         void Init()
         {
-            if (list is null)
+            if (list is null) list = target as ListData;
+
+            if (list.textList is not null) return;
+
+            for (int i = 0; i < list.Count; ++i)
             {
-                list = target as ListData;
+                if (list[i] is not null) continue;
+                list.RemoveAt(i);
+                break;
             }
 
-            if (list.texts is null)
+            var textList = list.textList = new ReorderableList(list.data, typeof(string))
             {
-                list.texts = new List<Text>();
-            }
-
-            if (list.template is null)
-            {
-                var path = "Assets/Unite Framework/Editor/Prefabs/UITextTemplate.prefab";
-                var obj = AssetDatabase.LoadAssetAtPath<GameObject>(path);
-                list.template = PrefabUtility.InstantiatePrefab(obj) as GameObject;
-            }
-            if (list.templateRect is null)
-            {
-                list.templateRect = new SerializedObject(list.template.GetComponent<RectTransform>());
-            }
-            if (list.templateText is null)
-            {
-                list.templateText = new SerializedObject(list.template.GetComponent<Text>());
-            }
-
-            if (list.data is null) 
-            {
-                list.data = new List<string>();
-            }
-
-            if (list.textList is null) 
-            {
-                var textList = list.textList = new ReorderableList(list.data, typeof(string));
-                
-                textList.drawHeaderCallback = (rect) =>
+                drawHeaderCallback = (rect) =>
                 {
                     EditorGUI.LabelField(rect, "列表数据");
-                };
-                textList.drawElementCallback = (rect, index, isActived, isFocused) =>
+                },
+                drawElementCallback = (rect, index, isActived, isFocused) =>
                 {
                     var nameRect = new Rect(rect);
                     nameRect.width /= 2;
                     var dataRect = new Rect(nameRect);
                     dataRect.x += dataRect.width;
 
-                    EditorGUI.LabelField(nameRect, list.texts[index].name);
+                    nameRect.width /= 3;
+                    list.texts[index].name = EditorGUI.TextField(nameRect, list.texts[index].name);
+                    list.OnPrimaryChange(list.texts[index].name, index);
                     list[index] = EditorGUI.TextField(dataRect, list[index]);
-                };
-                textList.onAddCallback = (rList) =>
+                },
+                onAddCallback = (rList) =>
                 {
                     list.Add();
-                    rList.list.Add("");
-                };
-                textList.onRemoveCallback = (rList) =>
+                },
+                onRemoveCallback = (rList) =>
                 {
                     list.RemoveAt(rList.index);
-                    rList.list.RemoveAt(rList.index);
-                };
-                textList.onReorderCallbackWithDetails = (rList, oldIndex, newIndex) =>
+                },
+                onReorderCallbackWithDetails = (rList, oldIndex, newIndex) =>
                 {
                     list.texts[oldIndex].transform.SetSiblingIndex(newIndex);
 
@@ -227,10 +223,19 @@ namespace Unite.Framework.UI
                         oldIndex += step;
                     }
                     list.texts[newIndex] = temp;
-                };
-            }
+                }
+            };
+            
         }
 
-        public void OnTypeChange(ListData.DataType type) => list.dataType = type;
+        public void OnTypeChange(DataType type) => list.dataType = type;
+
+        [MenuItem("GameObject/UniteFramework/UI/ListData", false, 11)]
+        public static void Create()
+        {
+            var element = new GameObject().AddComponent<ListData>();
+            element.transform.parent = Selection.activeTransform;
+            element.name = "ListData";
+        }
     }
 }

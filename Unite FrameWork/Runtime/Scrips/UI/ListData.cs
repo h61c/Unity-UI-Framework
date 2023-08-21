@@ -6,12 +6,19 @@ using UnityEditorInternal;
 using UnityEditor;
 using UnityEditor.Build.Player;
 using JetBrains.Annotations;
+using Unity.VisualScripting;
+using UnityEditor.Rendering;
+using UnityEditor.Callbacks;
+using System.Linq.Expressions;
+using System;
+using System.Linq;
+using UnityEditor.Overlays;
 
 namespace Unite.Framework.UI
 {
-    public class ListData : MonoBehaviour, IUIDataCollection<string>
+    public class ListData : MonoBehaviour, IDataUIElement, IUIDataCollection<string>
     {
-        private class FormatStragety
+        public class FormatStragety
         {
             Dictionary<int, System.Func<string, string>> stragety 
                             = new Dictionary<int, System.Func<string, string>>();
@@ -41,13 +48,22 @@ namespace Unite.Framework.UI
                 return true;
             }
         }
-        private FormatStragety formatStragety = new FormatStragety();
+        public FormatStragety m_formatStragety = new FormatStragety();
+        public FormatStragety formatStragety => m_formatStragety;
 
-        public enum DataType : int
+
+
+        public virtual string sourceType => "ListData";
+        public virtual string sourceReference { get; set; }
+        public virtual bool reloadable { get; set; }
+        public virtual bool isReference { get; set; }
+        public UISerializedObject sourceObject => new UISerializedObject
         {
-            Field = 0,
-            Custom = 5
-        }
+            name = this.name,
+            sourceType = this.sourceType,
+            isReference = false,
+            content = data.ToArray()
+        };
         public int data_type = (int)DataType.Field;
         public DataType dataType
         { 
@@ -66,34 +82,73 @@ namespace Unite.Framework.UI
                 data.ForEach(info => texts[index++].text = Format(info));
             }
         }
-        public List<Text> texts;
-        public List<string> data;
-        public List<string> Data => data;
-        public string title;
-        private RectTransform m_RectTransform;
-        public RectTransform rectTransform
+
+        protected LayoutType m_layoutType;
+        public LayoutType layoutType
         {
-            get
+            get => m_layoutType;
+            set
             {
-                if (m_RectTransform is null) 
-                    m_RectTransform = this.GetComponent<RectTransform>();
-                return m_RectTransform;
+                m_layoutType = value;
+                switch (m_layoutType)
+                {
+                    case LayoutType.Horizontal:
+                        if (this.gameObject.TryGetComponent<VerticalLayoutGroup>(out var vertical))
+                            DestroyImmediate(vertical);
+                        if (this.gameObject.GetComponent<HorizontalLayoutGroup>())
+                            return;
+                        this.gameObject.AddComponent<HorizontalLayoutGroup>();
+                        return;
+                    case LayoutType.Vertical:
+                        if (this.gameObject.TryGetComponent<HorizontalLayoutGroup>(out var horizontal))
+                            DestroyImmediate(horizontal);
+                        if (this.gameObject.GetComponent<VerticalLayoutGroup>())
+                            return;
+                        this.gameObject.AddComponent<VerticalLayoutGroup>();
+                        return;
+                    default:
+                        if (this.gameObject.TryGetComponent<LayoutGroup>(out var layout))
+                            DestroyImmediate(layout);
+                        return;
+                }
             }
         }
-        public Transform textParent;
-        public Transform parent 
+
+        public List<Text> texts = new List<Text>();
+        public List<string> data = new List<string>();
+        public List<string> Data => data;
+        public Dictionary<string, int> map { get; } = new Dictionary<string, int>();
+        public string title 
+        { 
+            get => this.name; 
+            set => this.name = value;
+        }
+        public Transform dataParent 
         {
-            get => textParent;
-            set => textParent = value;
+            get => this.transform;
+            set { }
         }
 
         public virtual string this[int index]
         {
-            get => data[index];
+            get => texts[index] ? data[index] : null;
             set
             {
                 data[index] = value;
                 texts[index].text = Format(data[index]);
+            }
+        }
+
+        public virtual string this[string tittle]
+        {
+            get => map.TryGetValue(title, out var index) && index < Count ? this[index] : null;
+            set
+            {
+                if (!map.TryGetValue(title, out var index) || index >= Count)
+                {
+                    throw new System.Exception("不存在的主键");
+                }
+                this[index] = value;
             }
         }
 
@@ -103,14 +158,21 @@ namespace Unite.Framework.UI
 
 #if UNITY_EDITOR
         public ReorderableList textList;
-        public GameObject template;
-        public SerializedObject templateRect;
-        public SerializedObject templateText;
         public bool propertyFoldout = true;
         public bool drawSelect = false;
         public bool alwaysUpdate = false;
         public bool typeDropdown = false;
 #endif
+
+        protected virtual void Awake()
+        {
+            var index = 0;
+            foreach (var info in texts)
+            {
+                map.Add(info.name, index);
+                index += 1;
+            }
+        }
 
         void Start()
         {
@@ -120,6 +182,24 @@ namespace Unite.Framework.UI
         void Update()
         {
 
+        }
+
+        public bool LoadSource<T>(T data)
+        {
+            if (data is not string[] content) return false;
+            else if (content.Length != texts.Count)
+            {
+                Debug.LogError("data length is not match");
+                return false;
+            }
+
+            var index = 0;
+            foreach (var field in content)
+            {
+                texts[index].text = field;
+                index += 1;
+            }
+            return true;
         }
 
         public void UpdateData(object[] info, int index = 0)
@@ -161,15 +241,16 @@ namespace Unite.Framework.UI
                 Debug.LogError("Index out of range.");
                 return;
             }
+            map.Remove(texts[index].name);
             DestroyImmediate(texts[index].gameObject);
             texts.RemoveAt(index);
+            data.RemoveAt(index);
         }
 
         public virtual void Add(string value = "")
         {
             var rt = new GameObject("数据 " + texts.Count).AddComponent<RectTransform>();
-            print(parent.name);
-            rt.SetParent(parent);
+            rt.SetParent(dataParent);
             rt.anchorMin = new Vector2(0.5f, 0.5f);
             rt.anchorMax = new Vector2(0.5f, 0.5f);
 
@@ -177,6 +258,7 @@ namespace Unite.Framework.UI
             tx.text = value;
             tx.font = Resources.GetBuiltinResource(typeof(Font), "Arial.ttf") as Font;
             texts.Add(tx);
+            data.Add(tx.text);
         }
 
         public virtual void Clear()
@@ -212,10 +294,12 @@ namespace Unite.Framework.UI
             return true;
         }
 
-        public virtual IEnumerator<string> GetEnumerator() =>
-        new DataEnumerator<string, string>(
+        public virtual IEnumerator<string> GetEnumerator() => new DataEnumerator<string, string>(
             list: data,
-            GetCurrent: (in IList<string> list, in int index) => list[index]
+            GetCurrent: (in IList<string> list, in int index) =>
+            {
+                return list[index];
+            }
         );
 
         public string Format(string value)
@@ -236,6 +320,23 @@ namespace Unite.Framework.UI
         public bool TryAddFormat(int type, System.Func<string, string> format)
         {
             return formatStragety.TryAddFormat(type, format);
+        }
+
+        public void OnPrimaryChange(string primary, int index)
+        {
+            if (map.TryGetValue(primary, out var value) && value == index) return;
+            else if (map.ContainsKey(primary))
+            {
+                map[primary] = index;
+                return;
+            }
+            
+            var match = map.FirstOrDefault(pair => pair.Value.Equals(index));
+            if (!match.Equals(default(KeyValuePair<string, int>)))
+            {
+                map[match.Key] = int.MaxValue;
+            }
+            map.Add(primary, index);
         }
 
         IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();

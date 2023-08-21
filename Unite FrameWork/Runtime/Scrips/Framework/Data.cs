@@ -6,8 +6,6 @@ using UnityEngine.UIElements;
 namespace Unite.Framework
 {
     public interface IDataCollection<T> : IList<T> {}
-
-    
     public interface IUIDataCollection<T> : IDataCollection<T>
     {
         public enum DataStructType : int
@@ -15,7 +13,7 @@ namespace Unite.Framework
             
         }
         public List<T> Data { get; }
-        public Transform parent { get; set; }
+        public Transform dataParent { get; set; }
         public void UpdateData(object[] data, int index);
     }
 
@@ -44,16 +42,17 @@ namespace Unite.Framework
 
         object IEnumerator.Current => Current;
 
-        public bool MoveNext() => ++current >= list.Count;
+        public bool MoveNext()
+        {
+            return ++current < list.Count;
+        }
 
         public void Reset()
         {
-
         }
 
         public void Dispose()
         {
-
         }
     }
 }
